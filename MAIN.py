@@ -11,4 +11,4 @@ def create_n_drop_database(db_name):
     conn.close()
     print(f'database in name {db_name} has created!!')
 
-create_n_drop_database('tlgbot')
+create_n_drop_database('lifemate_db')

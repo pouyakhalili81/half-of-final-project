@@ -1,19 +1,60 @@
 import telebot
 from telebot.types import ReplyKeyboardMarkup,InlineKeyboardMarkup,InlineKeyboardButton,ReplyKeyboardRemove
+import pytz
+import datetime
+from datetime import datetime, timezone
 from translate import *
 from MAIN import *
 from DDL import *
+from DML import *
 from CONFIG import *
+from API import*
 
-bot_token = '7751684236:AAGaBXM_il8iCZV8hRVc-1lkMcT_tFOGO_A'
-bot = telebot.TeleBot(bot_token)
+bot = telebot.TeleBot(BOT_TOKEN)
 
 User_data = {}
+############listener#############
+def listener(messages):
+    for m in messages:
+        if m.content_type == 'text':
+            irantz = pytz.timezone('Asia/Tehran')
+            dt = datetime.fromtimestamp(m.date, tz=timezone.utc)
+            dt_iran = dt.astimezone(irantz)
+            time_str = dt_iran.strftime('%Y-%m-%d -- %H:%M:%S')
+            log_msg = f"{m.chat.username}--{m.chat.id}-- {time_str} : {m.text}"
+            print(log_msg)
+
 ########################                         PART             ONE            (START AND HELP)            ######################################
+
 @bot.message_handler(commands=['start'])
+def all_message_handler(message):
+    cid = message.chat.id
+    if is_user_exists(cid):
+        main_start(message)
+    else:
+        start_message_handler(message)
 def start_message_handler(message):
     cid = message.chat.id
-    firstname = message.chat.first_name
+    User_data[cid] = {}
+    bot.send_message(cid,texts['start'])
+    bot.send_message(cid,texts['start1'])
+    bot.register_next_step_handler(message,start2)
+def start2(message):
+    cid = message.chat.id
+    User_data[cid]['name'] = message.text
+    bot.send_message(cid,texts['start22'])
+    bot.register_next_step_handler(message,start3)
+def start3(message):
+    cid = message.chat.id
+    user_name = message.chat.username
+    fullname = User_data[cid]['name']
+    User_data[cid]['age'] = int(message.text)
+    age = User_data[cid]['age']
+    insert_data_User(cid,user_name,fullname,age)
+    User_data.pop(cid)
+    main_start(message)
+def main_start(message):
+    cid = message.chat.id
     keyboard = ReplyKeyboardMarkup(resize_keyboard=True)
     inline = InlineKeyboardMarkup()
     inline.add(InlineKeyboardButton(texts['btn_goal'],callback_data=texts['goal1']),InlineKeyboardButton(texts['btn_reminder'],callback_data=texts['reminder1']))
@@ -24,6 +65,7 @@ def start_message_handler(message):
     keyboard.add(texts['btn_score'],texts['btn_account'])
     bot.send_message(cid,texts['start'],reply_markup=keyboard)
     bot.send_message(cid,texts['start2'],reply_markup=inline)
+    
 
 @bot.message_handler(commands=['help'])
 def help_message_handler(message):
@@ -202,6 +244,7 @@ def call_handler(call):
         text = texts['start']
         bot.edit_message_text(chat_id=cid, message_id=mid, text=text, reply_markup=inline)
     ########################                          PART             THREE           (STEP   HANDLERS )                      ########################
+#                         GOAL STEP HANDLERS                         #
 @bot.message_handler(func= lambda msg : msg.text == texts['goal_add'] )
 def add_goal_message_handler(message):
     cid = message.chat.id
@@ -221,18 +264,24 @@ def desc_goal_register(message):
 def save_goal_deadline(message):
     cid = message.chat.id
     deadline = message.text.strip()
-    if '/' not in deadline:
-        bot.send_message(cid,texts['goal_ask_deadline'])
-        bot.register_next_step_handler(message,save_goal_deadline)
-        
+    if '/' not in deadline or not valid_date(deadline):
+        bot.send_message(cid, texts['goal_ask_deadline'])
+        bot.register_next_step_handler(message, save_goal_deadline)
+        return
+
     User_data[cid]['time'] = deadline
     title = User_data[cid]['title']
     description = User_data[cid]['desc']
     time = User_data[cid]['time']
     text = f"{texts['unvan']} = {title}\n{texts['desc']} = {description}\n{texts['mohlat']} = {time}"
-    bot.send_message(cid,text)
-    bot.send_message(cid,texts['goal_saved'])
-    User_data.pop(cid,None)
+
+    
+    goal_id = insert_data_Goal(cid,title,description,time)
+
+    bot.send_message(cid, text)
+    bot.send_message(cid, f"{texts['goal_saved']}\n{texts['your_goal_id']} {goal_id}")
+    User_data.pop(cid, None)
+
 
     
 def valid_date(date):
@@ -252,6 +301,92 @@ def valid_time(time):
     hour = int(hour)
     minute = int(minute)
     return 0 <= hour < 24 and 0 <= minute < 60
+
+@bot.message_handler(func=lambda msg: msg.text == texts['goal_show'])
+def show_goal(message):
+    cid = message.chat.id
+    goals = show_all_Goal(cid) 
+    if goals:
+        all_text = ''
+        for goal in goals:
+            goal_id = goal[0]
+            title = goal[1]
+            text_goal = goal[2]
+            aim_date = goal[3]
+            all_text += (
+            f"{texts['id']}: {goal_id}\n"
+            f"{texts['title']}: {title}\n"
+            f"{texts['goal_desc']}: {text_goal}\n"
+            f"{texts['date']}: {aim_date}\n"
+            "-------------\n"
+                            )
+        bot.send_message(cid,texts['goal_show_msg'])
+        bot.send_message(cid, all_text)  
+    else:
+        bot.send_message(cid, texts['no_goal'])
+
+
+@bot.message_handler(func= lambda msg : msg.text == texts['goal_remove'])
+def goal_remove(message):
+    cid = message.chat.id
+    User_data[cid] = {}
+    show_goal(message)
+    bot.send_message(cid,texts['goal_ask_remove'])
+    bot.register_next_step_handler(message,goal_remove_1)
+def goal_remove_1(message):
+    cid = message.chat.id
+    User_data[cid]['selected_goal'] = message.text
+    goal_id = User_data[cid]['selected_goal']
+    delete_from_Goal(goal_id)
+    User_data.pop(cid)
+    bot.send_message(cid,texts['goal_removed'])
+
+@bot.message_handler(func= lambda msg : msg.text == texts['goal_edit'])
+def goal_edit_handler(message):
+    cid = message.chat.id
+    User_data[cid] = {}
+    show_goal(message)
+    bot.send_message(cid,texts['your_goals'])
+    bot.send_message(cid,texts['goal_ask_edit'])
+    bot.register_next_step_handler(message,edit_goal)
+def edit_goal(message):
+    cid = message.chat.id
+    User_data[cid]['id'] = int(message.text)
+    bot.send_message(cid,texts['goal_ask_title'])
+    bot.register_next_step_handler(message,edit_goal_title)
+def edit_goal_title(message):
+    cid = message.chat.id
+    User_data[cid]['new_title'] = message.text
+    bot.send_message(cid,texts['goal_ask_description'])
+    bot.register_next_step_handler(message,edit_goal_desc)
+def edit_goal_desc(message):
+    cid = message.chat.id
+    User_data[cid]['new_desc'] = message.text
+    bot.send_message(cid,texts['goal_ask_deadline'])
+    bot.register_next_step_handler(message,edit_goal_time)
+def edit_goal_time(message):
+        cid = message.chat.id
+        deadline = message.text.strip()
+        if '/' not in deadline or not valid_date(deadline):
+            bot.send_message(cid, texts['goal_ask_deadline'])
+            bot.register_next_step_handler(message, edit_goal_time)
+            return
+
+        User_data[cid]['time'] = deadline
+        title = User_data[cid]['new_title']
+        description = User_data[cid]['new_desc']
+        time = User_data[cid]['time']
+        text = f"{texts['unvan']} = {title}\n{texts['desc']} = {description}\n{texts['mohlat']} = {time}"
+        id = User_data[cid]['id']
+    
+        update_data_Goal(id,title,description,aim_date=time)
+
+        bot.send_message(cid, text)
+        bot.send_message(cid, texts['goal_edited'])
+        User_data.pop(cid, None)
+
+
+
 
 @bot.message_handler(func= lambda msg : msg.text == texts['reminder_add'])
 def reminder_add_handler(message):
@@ -277,17 +412,26 @@ def reminder_time(message):
     cid = message.chat.id
     time = message.text.strip()
     if not valid_time(time):
-        bot.send_message(cid,texts['false'])
-        bot.register_next_step_handler(message,reminder_time)
-    User_data[cid]['time'] = time
+        bot.send_message(cid, texts['false'])
+        bot.register_next_step_handler(message, reminder_time)
+        return
 
+    User_data[cid]['time'] = time
     title = User_data[cid]['title']
-    time = User_data[cid]['time']
     date = User_data[cid]['date']
-    text =f'{texts['unvan']} = {title}\n{texts['zaman'] } = {time}\n {texts['tarikh']} = {date}'
-    bot.send_message(cid,text)
-    bot.send_message(cid,texts['reminder_saved'])
-    User_data.pop(cid)
+
+    text = f"{texts['unvan']} = {title}\n{texts['zaman']} = {time}\n{texts['tarikh']} = {date}"
+
+
+    remi_datetime = f"{date} {time}"
+
+    
+    reminder_id = insert_data_Reminder(cid, title, None, remi_datetime)
+
+    bot.send_message(cid, text)
+    bot.send_message(cid, f"{texts['reminder_saved']}\n{texts['your_reminder_id']} {reminder_id}")
+    User_data.pop(cid, None)
+
 
 @bot.message_handler(func=lambda msg: msg.text == texts['daily_add'])
 def daily_step_handler(message):
@@ -359,5 +503,5 @@ def edit_motive(message):
 
     
         
-
+bot.set_update_listener(listener)
 bot.infinity_polling()
